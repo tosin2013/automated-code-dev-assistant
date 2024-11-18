@@ -1,0 +1,26 @@
+# System Information
+- **Operating System**: [e.g., Windows 10, macOS Monterey, Ubuntu 20.04]
+- **Python Version**: [e.g., 3.8.10]
+- **Installed Packages**: [List of relevant packages and their versions]
+
+# Project Details
+- **Project Name**: [Your project's name]
+- **Project Description**: [Brief overview of the project]
+- **Primary Language**: [e.g., Python, JavaScript]
+- **Frameworks/Libraries Used**: [e.g., Django, React]
+
+# Task Information
+- **Objective**: [Clear description of the task or problem]
+- **Current Status**: [Current progress or issues encountered]
+- **Desired Outcome**: [What you aim to achieve]
+
+# Errors
+- **Error Message**: [The exact error message received]
+- **Error Code**: [If applicable]
+- **Stack Trace**: [Full stack trace]
+- **Context**: [What you were doing when the error occurred]
+- **Steps to Reproduce**: [Detailed steps to replicate the issue]
+
+# Resources
+- **Relevant URLs**: [Links to documentation, tutorials, or related resources]
+- **Search Keywords**: [Keywords to assist in finding solutions or information]
