@@ -76,7 +76,7 @@ These measures collectively help maintain the integrity of the codebase while be
    *If `requirements.txt` is not provided, install the necessary packages manually:*
 
    ```bash
-   pip install requests questionary inquirer httpx
+   pip install requests questionary inquirer
    ```
 
 ## Configuration
@@ -120,10 +120,10 @@ These measures collectively help maintain the integrity of the codebase while be
 1. **Run the Script**
 
    ```bash
-   python script_name.py
+   python groq_code_development_assistant.py
    ```
 
-   *Replace `script_name.py` with the actual name of the Python script.*
+   *Replace `groq_code_development_assistant.py` with the actual name of the Python script.*
 
 2. **Follow the Interactive Prompts**
 
