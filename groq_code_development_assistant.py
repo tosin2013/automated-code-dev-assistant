@@ -4,6 +4,7 @@ import requests
 import questionary
 import inquirer
 import httpx
+from bs4 import BeautifulSoup
 
 def ensure_api_key():
     """
@@ -228,6 +229,73 @@ def generate_conventions_md(task_description, intent):
     else:
         print(f"Error: Received status code {response.status_code} from the API.")
 
+def generate_detailed_prompt(action, focus, subject, context, role="senior software developer"):
+    """
+    Generates a detailed prompt based on the action, focus, subject, and context.
+
+    Args:
+        action (str): The action to be performed (e.g., 'Implement', 'Debug').
+        focus (str): The focus area (e.g., 'Login System', 'Database Connection').
+        subject (str): The subject or technology (e.g., 'Python', 'JavaScript').
+        context (str): Additional context or information.
+
+    Returns:
+        str: A detailed prompt tailored to the specified parameters.
+    """
+    templates = {
+        "Implement": (
+            "As a {role}, Develop a {focus} using {subject} that achieves the following objectives:\n"
+            "{context}\n"
+            "Ensure the implementation adheres to best practices and is well-documented."
+        ),
+        "Debug": (
+            "As a {role}, Identify and resolve issues in the {focus} developed with {subject}. The current issues are:\n"
+            "{context}\n"
+            "Provide a detailed analysis of the problems and the steps taken to fix them."
+        ),
+        "Optimize": (
+            "As a {role}, Enhance the performance of the {focus} written in {subject}. Current performance metrics and areas for improvement are:\n"
+            "{context}\n"
+            "Implement optimizations and document the performance gains achieved."
+        ),
+        "Refactor": (
+            "As a {role}, Restructure the {focus} codebase implemented in {subject} to improve code quality. The current code issues are:\n"
+            "{context}\n"
+            "Ensure the refactored code is more maintainable and adheres to coding standards."
+        ),
+        "Review": (
+            "As a {role}, Conduct a comprehensive review of the {focus} developed in {subject}. The aspects to be reviewed include:\n"
+            "{context}\n"
+            "Provide feedback and suggestions for improvement."
+        ),
+        "Integrate": (
+            "As a {role}, Combine the {focus} with existing systems using {subject}. Integration points and requirements are:\n"
+            "{context}\n"
+            "Ensure seamless integration and document the process."
+        ),
+        "Document": (
+            "As a {role}, Create detailed documentation for the {focus} implemented in {subject}. Areas to be covered include:\n"
+            "{context}\n"
+            "Ensure the documentation is clear, comprehensive, and user-friendly."
+        ),
+        "Test": (
+            "As a {role}, Develop and execute test cases for the {focus} written in {subject}. Testing requirements and scenarios are:\n"
+            "{context}\n"
+            "Ensure all functionalities are thoroughly tested and document the results."
+        ),
+        "Deploy": (
+            "As a {role}, Deploy the {focus} developed in {subject} to the target environment. Deployment details and considerations are:\n"
+            "{context}\n"
+            "Ensure a smooth deployment process and verify the system's stability post-deployment."
+        ),
+    }
+
+    template = templates.get(action)
+    if not template:
+        raise ValueError(f"Unsupported action: {action}")
+
+    return template.format(focus=focus, subject=subject, context=context, role=role)
+
 def generate_aider_command():
     """
     Generates the aider command based on the outputs of the script.
@@ -243,6 +311,20 @@ def generate_aider_command():
         "$(cat sensitive_files.txt)"
     ]
     return " ".join(command)
+
+def scrape_url_content(url):
+    """
+    Scrapes the content of the given URL and returns the text.
+
+    Args:
+        url (str): The URL to scrape.
+
+    Returns:
+        str: The scraped text content.
+    """
+    response = requests.get(url)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    return soup.get_text()
 
 def main():
     """
@@ -270,11 +352,11 @@ def main():
     ]
     focuses = [
         "Login System", "Sorting Algorithm", "Database Connection",
-        "User Interface", "API Endpoint", "Vue.js Component",
+        "User Interface", "API Endpoint", "Vue.js Component", "Dockerfile",
         "Vue.js State Management", "Ansible Playbook", "Ansible Role", "Vite"
     ]
     subjects = [
-        "JavaScript", "Python", "Java", "C++", "React", "Angular",
+        "JavaScript", "Python", "Java", "C++", "React", "Angular",  "Dockerfile",
         "Django", "Flask", "TensorFlow", "Vue.js", "Ansible", "Vite"
     ]
 
@@ -295,15 +377,28 @@ def main():
         print("After creating the file, run this script again.")
         exit(1)
 
+    # Extract URL from context and scrape content
+    url = None
+    for line in context.splitlines():
+        if line.startswith("http"):
+            url = line.strip()
+            break
+
+    if url:
+        url_content = scrape_url_content(url)
+        context += f"\n\nScraped Content from URL:\n{url_content}"
+
     file_paths = prompt_for_files()
     sensitive_files = prompt_for_sensitive_files()
+    detailed_prompt = generate_detailed_prompt(action, focus, subject, context)
 
+    # Include the detailed prompt in the initial_prompt
     initial_prompt = (
         f"Action: {action}\n"
         f"Focus: {focus}\n"
         f"Subject: {subject}\n"
-        f"Context:\n{context}\n"
         f"Sensitive Files: {', '.join(sensitive_files)}"
+        f"Detailed Prompt:\n{detailed_prompt}\n"
     )
 
     with open("initial_prompt.md", "w") as f:
