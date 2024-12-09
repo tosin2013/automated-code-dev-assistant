@@ -5,6 +5,31 @@ import questionary
 import inquirer
 import httpx
 from bs4 import BeautifulSoup
+from aider.coders import Coder
+from aider.models import Model
+
+
+def ask_aider_about_issue(issue_description, files):
+    """
+    Interact with Aider to inquire about a specific issue.
+
+    Args:
+        issue_description (str): Description of the task or issue.
+        files (list): List of file paths to include in the chat session.
+
+    Returns:
+        str: Aider's response regarding the issue.
+    """
+    # Initialize the model (e.g., 'groq/llama3-70b-8192')
+    model = Model("groq/llama3-70b-8192")
+
+    # Create a Coder instance with the specified model and files
+    coder = Coder.create(main_model=model, fnames=files)
+
+    # Send the issue description to Aider and get the response
+    response = coder.run(issue_description)
+
+    return response
 
 def ensure_api_key():
     """
@@ -49,7 +74,7 @@ def prompt_for_files():
     for root, _, filenames in os.walk('.'):
         for filename in filenames:
             files.append(os.path.join(root, filename))
-    
+
     existing_files = []
     if os.path.isfile("files.txt"):
         with open("files.txt", "r") as f:
@@ -71,7 +96,7 @@ def prompt_for_files():
     ]
     answers = inquirer.prompt(questions)
     selected_files = answers['selected_files']
-    
+
     all_files = existing_files + selected_files
     print("Files to be processed:", ', '.join(all_files))
     with open("files.txt", "w") as f:
@@ -111,7 +136,7 @@ def prompt_for_sensitive_files():
     ]
     answers = inquirer.prompt(questions)
     selected_sensitive_files = answers['sensitive_files']
-    
+
     all_sensitive_files = sensitive_files + selected_sensitive_files
     print("Sensitive files:", ', '.join(all_sensitive_files))
     with open("sensitive_files.txt", "w") as f:
@@ -203,7 +228,7 @@ def generate_conventions_md(task_description, intent):
     Ensure the output is concise and formatted properly for a markdown file.
     ```
     """
-    
+
     payload = {
         "model": "llama3-8b-8192",
         "messages": [{"role": "user", "content": prompt}]
@@ -326,6 +351,57 @@ def scrape_url_content(url):
     soup = BeautifulSoup(response.content, 'html.parser')
     return soup.get_text()
 
+def resolve_conflicts(personas, api_key, max_rounds=3):
+    """
+    Resolves conflicts between personas by sending their perspectives to the LLM and reaching a consensus.
+
+    Args:
+        personas (list): A list of persona dictionaries, each containing 'role', 'background', and 'perspective'.
+        api_key (str): The API key for authenticating the request.
+        max_rounds (int): The maximum number of rounds to attempt conflict resolution.
+
+    Returns:
+        str: The resolved consensus or final decision after conflict resolution.
+    """
+    for round in range(max_rounds):
+        print(f"Conflict Resolution Round {round + 1}")
+        perspectives = "\n".join([f"{persona['role']} ({persona['background']}): {persona['perspective']}" for persona in personas])
+
+        prompt = f"""
+        The following personas have conflicting perspectives:
+        {perspectives}
+
+        Please help resolve these conflicts and provide a consensus.
+        """
+
+        payload = {
+            "model": "llama3-8b-8192",
+            "messages": [{"role": "user", "content": prompt}]
+        }
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers=headers,
+            data=json.dumps(payload)
+        )
+
+        response.raise_for_status()
+
+        response_json = response.json()
+        aider_response = response_json['choices'][0]['message']['content']
+        print(f"Assistant's Response: {aider_response}")
+
+        user_input = input("Do you accept this resolution? (yes to accept, no to provide more input): ")
+        if user_input.lower() == 'yes':
+            return aider_response
+
+    return "Max rounds reached. Final decision based on last input."
+
 def main():
     """
     Main function to execute the script.
@@ -392,13 +468,53 @@ def main():
     sensitive_files = prompt_for_sensitive_files()
     detailed_prompt = generate_detailed_prompt(action, focus, subject, context)
 
+    personas = [
+        {
+            'role': 'Senior Developer',
+            'background': 'Experienced in backend development with a strong focus on performance and security',
+            'perspective': 'Refactor the legacy codebase while maintaining its stability and performance. Prioritize security enhancements and minimize the risk of introducing new bugs.'
+        },
+        {
+            'role': 'Junior Developer',
+            'background': 'New to the team, specializes in frontend development with a focus on user experience',
+            'perspective': 'Focus on improving the user interface and enhancing the platform\'s visual appeal. Ensure the code is easy to understand and maintain.'
+        },
+        {
+            'role': 'DevOps Engineer',
+            'background': 'Expert in CI/CD pipelines and cloud infrastructure',
+            'perspective': 'Prioritize automation and deployment efficiency. Ensure a smooth deployment process and verify the system\'s stability post-deployment.'
+        },
+        {
+            'role': 'Product Manager',
+            'background': 'Focuses on product strategy and user experience',
+            'perspective': 'Refactor the user interface to improve the overall user experience and enhance the platform\'s visual appeal. Focus on providing a clear and intuitive navigation experience, and consider implementing new features to attract new customers.'
+        }
+    ]
+    api_key = os.getenv("GROQ_API_KEY")
+    resolved_conflicts = resolve_conflicts(personas, api_key)
+    detailed_prompt = generate_detailed_prompt(action, focus, subject, context)
+
+    # Generic pseudoscript outlining best software development steps
+    pseudoscript = (
+        "1. **Planning**: Define the project scope, objectives, and requirements.\n"
+        "2. **Design**: Create architectural and detailed design documents.\n"
+        "3. **Development**: Implement the design using {subject}.\n"
+        "4. **Testing**: Develop and execute test cases to ensure functionality.\n"
+        "5. **Deployment**: Deploy the system to the target environment.\n"
+        "6. **Maintenance**: Monitor and maintain the system post-deployment."
+        "Please follow the Best Software Development Steps outlined above."
+    )
+
     # Include the detailed prompt in the initial_prompt
     initial_prompt = (
         f"Action: {action}\n"
         f"Focus: {focus}\n"
         f"Subject: {subject}\n"
-        f"Sensitive Files: {', '.join(sensitive_files)}"
+        f"Sensitive Files: {', '.join(sensitive_files)}\n"
         f"Detailed Prompt:\n{detailed_prompt}\n"
+        f"Personas:\n{personas}\n"
+        f"Resolved Conflicts:\n{resolved_conflicts}\n"
+        f"Please follow the Best Software Development Steps outlined above and incorporate the perspectives of the personas provided.:\n{pseudoscript}\n"
     )
 
     with open("initial_prompt.md", "w") as f:

@@ -1,0 +1,11 @@
+# Task Information
+- **Objective**: [Clear description of the task or problem]
+- **Current Status**: [Current progress or issues encountered]
+- **Desired Outcome**: [What you aim to achieve]
+
+# Errors
+- **Error Message**: [The exact error message received]
+- **Error Code**: [If applicable]
+- **Stack Trace**: [Full stack trace]
+- **Context**: [What you were doing when the error occurred]
+- **Steps to Reproduce**: [Detailed steps to replicate the issue]
