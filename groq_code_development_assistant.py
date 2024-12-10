@@ -7,7 +7,24 @@ import httpx
 from bs4 import BeautifulSoup
 from aider.coders import Coder
 from aider.models import Model
+from rich.console import Console
+from rich.prompt import Prompt
+from chromadb import Client
+from chromadb.config import Settings
+import hashlib
+import torch
+from transformers import RobertaTokenizer, RobertaModel
 
+console = Console()
+
+# Initialize ChromaDB client
+db = Client(Settings())
+files_collection = db.create_collection("files")
+urls_collection = db.create_collection("urls")
+
+# Load CodeBERT model and tokenizer
+tokenizer = RobertaTokenizer.from_pretrained("microsoft/codebert-base")
+model = RobertaModel.from_pretrained("microsoft/codebert-base")
 
 def ask_aider_about_issue(issue_description, files):
     """
@@ -351,28 +368,227 @@ def scrape_url_content(url):
     soup = BeautifulSoup(response.content, 'html.parser')
     return soup.get_text()
 
-def resolve_conflicts(personas, api_key, max_rounds=3):
+def generate_id(path: str) -> str:
+    """
+    Generate a unique ID based on the file path.
+    
+    Args:
+        path (str): The path of the file.
+        
+    Returns:
+        str: A string that serves as a unique identifier.
+    """
+    return hashlib.sha256(path.encode()).hexdigest()
+
+def sanitize_content(content: str) -> str:
+    """
+    Sanitize the content to remove any sensitive information.
+
+    Args:
+        content (str): The content to sanitize.
+
+    Returns:
+        str: The sanitized content.
+    """
+    # Implement sanitization logic here (e.g., removing API keys, passwords)
+    # For demonstration, we'll just return the content as is
+    return content
+
+def is_sensitive_content(content: str) -> bool:
+    """
+    Check if the content contains sensitive information.
+
+    Args:
+        content (str): The content to check.
+
+    Returns:
+        bool: True if the content is sensitive, False otherwise.
+    """
+    # Implement logic to identify sensitive content
+    # For demonstration, we'll just return False
+    return False
+
+def read_code_file(file_path):
+    """Read the content of a code file."""
+    if not os.path.isfile(file_path):
+        print(f"Error: The file {file_path} does not exist.")
+        return None
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            return file.read()
+    except Exception as e:
+        print(f"An error occurred while reading the file: {str(e)}")
+        return None
+
+def vectorize_code(content):
+    """Vectorize code content using CodeBERT."""
+    inputs = tokenizer(content, return_tensors='pt', padding=True, truncation=True)
+    with torch.no_grad():
+        outputs = model(**inputs)
+    vectors = outputs.last_hidden_state.mean(dim=1)
+    return vectors.numpy().flatten()
+
+def dump_to_chroma(file_path, db_client):
+    """Read code file, vectorize it and dump into ChromaDB."""
+    code_content = read_code_file(file_path)
+    if code_content is None:
+        return
+
+    # Vectorize the code content
+    code_vector = vectorize_code(code_content)
+
+    # Prepare data for ChromaDB
+    document_data = {
+        "ids": [os.path.basename(file_path)],  # Unique id for the document
+        "types": ["code"],
+        "content": [code_content],
+        "vectors": [code_vector.tolist()],  # Convert to list for serialization
+    }
+
+    # Upsert data into ChromaDB
+    db_client.collection("your_collection_name").upsert(document_data)
+
+def store_files_and_urls_in_db(files, urls):
+    """
+    Store the files and URLs in the ChromaDB database with unique IDs.
+
+    Args:
+        files (list): List of file paths.
+        urls (list): List of URLs.
+    """
+    # Process files
+    for file_path in files:
+        try:
+            with open(file_path, 'r') as f:
+                file_content = f.read()
+            
+            if is_sensitive_content(file_content):
+                console.print(f"[bold red]Sensitive content detected in file: {file_path}. Please review before uploading.[/bold red]")
+                continue
+
+            sanitized_content = sanitize_content(file_content)
+            file_id = generate_id(file_path)
+            
+            # Create vector embedding
+            vector = vectorize_code(sanitized_content).tolist()
+
+            # Perform the upsert for a single file
+            files_collection.upsert(
+                ids=[file_id],
+                documents=[sanitized_content],
+                metadatas=[{"path": file_path, "type": "file"}],
+                embeddings=[vector]
+            )
+            
+        except Exception as e:
+            console.print(f"[bold red]Error processing file {file_path}: {str(e)}[/bold red]")
+
+    # Process URLs
+    for url in urls:
+        try:
+            response = requests.get(url)
+            url_content = response.text
+            
+            if is_sensitive_content(url_content):
+                console.print(f"[bold red]Sensitive content detected in URL: {url}. Please review before uploading.[/bold red]")
+                continue
+
+            sanitized_content = sanitize_content(url_content)
+            url_id = generate_id(url)
+            
+            # Create vector embedding
+            vector = vectorize_code(sanitized_content).tolist()
+
+            # Perform the upsert for a single URL
+            urls_collection.upsert(
+                ids=[url_id],
+                documents=[sanitized_content],
+                metadatas=[{"url": url, "type": "url"}],
+                embeddings=[vector]
+            )
+            
+        except Exception as e:
+            console.print(f"[bold red]Error processing URL {url}: {str(e)}[/bold red]")
+
+def load_files_and_urls_from_db():
+    """
+    Load the files and URLs from the ChromaDB database.
+
+    Returns:
+        tuple: A tuple containing a list of file contents and a list of URL contents.
+    """
+    # Use get() method to retrieve all documents
+    files = files_collection.get()
+    urls = urls_collection.get()
+
+    # Extract contents from the results
+    file_contents = files.get('documents', []) if files else []
+    url_contents = urls.get('documents', []) if urls else []
+
+    return file_contents, url_contents
+
+def resolve_conflicts(personas, api_key, file_paths, context_file, max_rounds=10):
     """
     Resolves conflicts between personas by sending their perspectives to the LLM and reaching a consensus.
 
     Args:
         personas (list): A list of persona dictionaries, each containing 'role', 'background', and 'perspective'.
         api_key (str): The API key for authenticating the request.
+        file_paths (list): List of file paths to include in the chat session.
+        context_file (str): Path to the context file.
         max_rounds (int): The maximum number of rounds to attempt conflict resolution.
 
     Returns:
         str: The resolved consensus or final decision after conflict resolution.
     """
+    # Read the context file
+    with open(context_file, 'r') as f:
+        context_contents = f.read()
+
+    # Store files and URLs in the database
+    urls = [line.strip() for line in context_contents.splitlines() if line.startswith("http")]
+    store_files_and_urls_in_db(file_paths, urls)
+
     for round in range(max_rounds):
-        print(f"Conflict Resolution Round {round + 1}")
-        perspectives = "\n".join([f"{persona['role']} ({persona['background']}): {persona['perspective']}" for persona in personas])
+        console.print(f"[bold blue]Conflict Resolution Round {round + 1}[/bold blue]")
+        perspectives = "\n".join([f"[bold]{persona['role']}[/bold] ({persona['background']}): {persona['perspective']}" for persona in personas])
 
-        prompt = f"""
-        The following personas have conflicting perspectives:
-        {perspectives}
+        # Reload the files and URLs from the database on each new run
+        file_contents, url_contents = load_files_and_urls_from_db()
 
-        Please help resolve these conflicts and provide a consensus.
-        """
+        # Combine all file contents into one string
+        all_files_contents = "\n".join(file_contents)
+        all_urls_contents = "\n".join(url_contents)
+
+        # Construct the focus_files string with the file contents and context
+        focus_files_str = (
+            "Focusing on the following files:\n"
+            f"{all_files_contents}\n"
+            f"Context from {context_file}:\n"
+            f"{context_contents}\n\n"
+            f"Additional URL contents:\n"
+            f"{all_urls_contents}\n\n"
+            "Please provide a supportive response that captures the essence of this process.\n\n"
+        )
+
+        # Now integrate that into the content string, using an f-string to interpolate the variable
+        prompt = (
+            f"The following personas have conflicting perspectives:\n"
+            f"{perspectives}\n\n"
+            f"David, as the leader, guides the team through a step-by-step process to resolve the issue "
+            f"in the given context file. The goal is to foster collaboration among the team members, "
+            f"ensuring clarity and structure, and allowing for a consensus on a technical solution that "
+            f"addresses all perspectives. The process is:\n\n"
+            f"1) Gather All Perspectives: David summarizes each persona's viewpoint.\n"
+            f"2) Identify the Core Issue: Examine the context file to determine the root cause.\n"
+            f"3) Brainstorm Solutions: Team members offer potential solutions.\n"
+            f"4) Discuss and Refine: Collaborate and refine the ideas.\n"
+            f"5) Reach Consensus: Arrive at a balanced, feasible technical solution.\n"
+            f"6) Record the Action Plan: Document the steps everyone agrees to.\n\n"
+            f"7) Display Sudo Code and steps to resolve the issue.\n\n"
+            f"{focus_files_str}"
+            f"Please provide a structured, supportive response guiding the team through these steps."
+        )
 
         payload = {
             "model": "llama3-8b-8192",
@@ -394,13 +610,35 @@ def resolve_conflicts(personas, api_key, max_rounds=3):
 
         response_json = response.json()
         aider_response = response_json['choices'][0]['message']['content']
-        print(f"Assistant's Response: {aider_response}")
+        console.print(f"[bold green]Assistant's Response:[/bold green] {aider_response}")
 
-        user_input = input("Do you accept this resolution? (yes to accept, no to provide more input): ")
-        if user_input.lower() == 'yes':
-            return aider_response
+        for persona in personas:
+            console.print(f"[bold]{persona['role']}[/bold] ({persona['background']}): {persona['perspective']}")
 
-    return "Max rounds reached. Final decision based on last input."
+        while True:
+            user_input = Prompt.ask("[bold yellow]Your response (or type 'exit' to end)[/bold yellow]")
+            if user_input.lower() == "exit":
+                console.print("[bold red]Exiting chat.[/bold red]")
+                return aider_response
+
+            prompt += f"\nUser: {user_input}"
+
+            payload = {
+                "model": "llama3-8b-8192",
+                "messages": [{"role": "user", "content": prompt}]
+            }
+
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                data=json.dumps(payload)
+            )
+
+            response.raise_for_status()
+
+            response_json = response.json()
+            aider_response = response_json['choices'][0]['message']['content']
+            console.print(f"[bold green]Assistant's Response:[/bold green] {aider_response}")
 
 def main():
     """
@@ -456,7 +694,7 @@ def main():
     # Extract URL from context and scrape content
     url = None
     for line in context.splitlines():
-        if line.startswith("http"):
+        if (line.startswith("http")):
             url = line.strip()
             break
 
@@ -469,29 +707,50 @@ def main():
     detailed_prompt = generate_detailed_prompt(action, focus, subject, context)
 
     personas = [
-        {
-            'role': 'Senior Developer',
-            'background': 'Experienced in backend development with a strong focus on performance and security',
-            'perspective': 'Refactor the legacy codebase while maintaining its stability and performance. Prioritize security enhancements and minimize the risk of introducing new bugs.'
+    {
+        "role": "Senior Developer",
+        "name": "Emily",
+        "background": {
+            "experience": "Over 10 years of experience in backend development, specializing in performance optimization and security.",
+            "education": "Holds a degree in Computer Science with ongoing professional development in cybersecurity.",
+            "work_history": "Has a proven track record of delivering high-performance, secure systems, having worked in both startups and large tech companies."
         },
-        {
-            'role': 'Junior Developer',
-            'background': 'New to the team, specializes in frontend development with a focus on user experience',
-            'perspective': 'Focus on improving the user interface and enhancing the platform\'s visual appeal. Ensure the code is easy to understand and maintain.'
+        "perspective": "Refactor the legacy codebase while maintaining its stability and performance. Prioritize security enhancements and minimize the risk of introducing new bugs."
+    },
+    {
+        "role": "Junior Developer",
+        "name": "Jake",
+        "background": {
+            "experience": "Fresh out of university with a few internships under his belt, eager to prove himself in a professional environment.",
+            "education": "Recently completed a degree in Computer Science with a focus on frontend development and user experience.",
+            "work_history": "Contributed to minor projects and now ready to contribute to a live product in a high-tech startup."
         },
-        {
-            'role': 'DevOps Engineer',
-            'background': 'Expert in CI/CD pipelines and cloud infrastructure',
-            'perspective': 'Prioritize automation and deployment efficiency. Ensure a smooth deployment process and verify the system\'s stability post-deployment.'
+        "perspective": "Focus on improving the user interface and enhancing the platform's visual appeal. Ensure the code is easy to understand and maintain."
+    },
+    {
+        "role": "DevOps Engineer",
+        "name": "Alex",
+        "background": {
+            "experience": "Extensive experience in setting up and managing CI/CD pipelines and cloud infrastructure, with a focus on automation and efficiency.",
+            "education": "Degree in Computer Science with certifications in cloud platforms and DevOps tools.",
+            "work_history": "Has worked in various environments, from small startups to large enterprises, ensuring smooth deployments and system stability."
         },
-        {
-            'role': 'Product Manager',
-            'background': 'Focuses on product strategy and user experience',
-            'perspective': 'Refactor the user interface to improve the overall user experience and enhance the platform\'s visual appeal. Focus on providing a clear and intuitive navigation experience, and consider implementing new features to attract new customers.'
-        }
+        "perspective": "Prioritize automation and deployment efficiency. Ensure a smooth deployment process and verify the system's stability post-deployment."
+    },
+    {
+        "role": "Product Manager",
+        "name": "David",
+        "background": {
+            "experience": "Background in product management with a focus on user experience and product strategy.",
+            "education": "Degree in Business or Marketing with additional training in UX/UI design.",
+            "work_history": "Managed products from ideation to launch, with experience in tech startups and digital agencies."
+        },
+        "perspective": "Refactor the user interface to improve the overall user experience and enhance the platform's visual appeal. Focus on providing a clear and intuitive navigation experience, and consider implementing new features to attract new customers."
+    }
     ]
+
     api_key = os.getenv("GROQ_API_KEY")
-    resolved_conflicts = resolve_conflicts(personas, api_key)
+    resolved_conflicts = resolve_conflicts(personas, api_key, file_paths, context_file)
     detailed_prompt = generate_detailed_prompt(action, focus, subject, context)
 
     # Generic pseudoscript outlining best software development steps
@@ -551,7 +810,12 @@ def main():
             print("No further questions from the assistant. Exiting chat.")
             break
 
+    # Read issue_description from context.txt
+    issue_description = context
 
+    # Call ask_aider_about_issue with issue_description
+    aider_response = ask_aider_about_issue(issue_description, file_paths)
+    print(f"Aider's Response: {aider_response}")
 
 if __name__ == "__main__":
     main()

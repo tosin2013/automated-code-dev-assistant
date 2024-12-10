@@ -1,0 +1,10 @@
+requests
+questionary
+inquirer
+httpx
+beautifulsoup4
+aider
+rich
+chromadb
+torch
+transformers
