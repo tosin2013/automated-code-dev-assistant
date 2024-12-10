@@ -371,10 +371,10 @@ def scrape_url_content(url):
 def generate_id(path: str) -> str:
     """
     Generate a unique ID based on the file path.
-    
+
     Args:
         path (str): The path of the file.
-        
+
     Returns:
         str: A string that serves as a unique identifier.
     """
@@ -461,14 +461,14 @@ def store_files_and_urls_in_db(files, urls):
         try:
             with open(file_path, 'r') as f:
                 file_content = f.read()
-            
+
             if is_sensitive_content(file_content):
                 console.print(f"[bold red]Sensitive content detected in file: {file_path}. Please review before uploading.[/bold red]")
                 continue
 
             sanitized_content = sanitize_content(file_content)
             file_id = generate_id(file_path)
-            
+
             # Create vector embedding
             vector = vectorize_code(sanitized_content).tolist()
 
@@ -479,7 +479,7 @@ def store_files_and_urls_in_db(files, urls):
                 metadatas=[{"path": file_path, "type": "file"}],
                 embeddings=[vector]
             )
-            
+
         except Exception as e:
             console.print(f"[bold red]Error processing file {file_path}: {str(e)}[/bold red]")
 
@@ -488,14 +488,14 @@ def store_files_and_urls_in_db(files, urls):
         try:
             response = requests.get(url)
             url_content = response.text
-            
+
             if is_sensitive_content(url_content):
                 console.print(f"[bold red]Sensitive content detected in URL: {url}. Please review before uploading.[/bold red]")
                 continue
 
             sanitized_content = sanitize_content(url_content)
             url_id = generate_id(url)
-            
+
             # Create vector embedding
             vector = vectorize_code(sanitized_content).tolist()
 
@@ -506,13 +506,13 @@ def store_files_and_urls_in_db(files, urls):
                 metadatas=[{"url": url, "type": "url"}],
                 embeddings=[vector]
             )
-            
+
         except Exception as e:
             console.print(f"[bold red]Error processing URL {url}: {str(e)}[/bold red]")
 
 def load_files_and_urls_from_db():
     """
-    Load the files and URLs from the ChromaDB database.
+    Load the files and URLs from the ChromaDB database and print their status.
 
     Returns:
         tuple: A tuple containing a list of file contents and a list of URL contents.
@@ -524,6 +524,15 @@ def load_files_and_urls_from_db():
     # Extract contents from the results
     file_contents = files.get('documents', []) if files else []
     url_contents = urls.get('documents', []) if urls else []
+
+    # Print the status of the files and URLs being loaded
+    console.print(f"[bold blue]Loading {len(file_contents)} files from the database...[/bold blue]")
+    for file in file_contents:
+        console.print(f"[bold green]Loaded file:[/bold green] {file[:100]}...")  # Print first 100 characters
+
+    console.print(f"[bold blue]Loading {len(url_contents)} URLs from the database...[/bold blue]")
+    for url in url_contents:
+        console.print(f"[bold green]Loaded URL content:[/bold green] {url[:100]}...")  # Print first 100 characters
 
     return file_contents, url_contents
 
